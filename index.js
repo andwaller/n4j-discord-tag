@@ -184,7 +184,7 @@ client.on(Events.InteractionCreate, async interaction => {
         ? ((adopterCount - baseline.adopters) / baseline.adopters) * 100
         : null;
 
-      const rateDelta = rate - baseline.adoptionRate;
+      const rateDelta = Number(rateDisplay) - baseline.adoptionRate;
 
       const lines = [
         `📌 Baseline (**${baseline.date}**): **${baseline.adopters.toLocaleString()}** adopters`,

@@ -6,8 +6,11 @@ const {
   REST,
   Routes,
   SlashCommandBuilder,
-  Events
+  Events,
+  MessageFlags
 } = require("discord.js");
+
+const { verifyConnectivity, ensureBaselineSnapshot } = require("./neo4j");
 
 const client = new Client({
   intents: [
@@ -24,6 +27,16 @@ const commands = [
 
 client.once(Events.ClientReady, async readyClient => {
   console.log(`Logged in as ${readyClient.user.tag}`);
+
+  try {
+    await verifyConnectivity();
+    console.log("Connected to Neo4j.");
+
+    await ensureBaselineSnapshot();
+    console.log("Neo4j baseline snapshot ensured.");
+  } catch (error) {
+    console.error("Failed to initialize Neo4j:", error);
+  }
 
   const guild = readyClient.guilds.cache.first();
 
@@ -58,7 +71,7 @@ client.on(Events.InteractionCreate, async interaction => {
   if (!interaction.isChatInputCommand()) return;
   if (interaction.commandName !== "n4j-stats") return;
 
-  await interaction.deferReply({ ephemeral: true });
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   try {
     const guild = interaction.guild;

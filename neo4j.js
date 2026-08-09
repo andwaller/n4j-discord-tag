@@ -16,13 +16,18 @@ async function verifyConnectivity() {
   await driver.verifyConnectivity({ database: NEO4J_DATABASE });
 }
 
-async function ensureNeo4Constraint() {
+async function ensureNeo4Constraints() {
   const session = driver.session({ database: NEO4J_DATABASE });
 
   try {
     await session.run(
       `CREATE CONSTRAINT neo4_snapshot_date_unique IF NOT EXISTS
        FOR (s:Neo4Snapshot) REQUIRE s.date IS UNIQUE`
+    );
+
+    await session.run(
+      `CREATE CONSTRAINT neo4_adopter_discord_user_id_unique IF NOT EXISTS
+       FOR (u:Neo4Adopter) REQUIRE u.discordUserId IS UNIQUE`
     );
   } finally {
     await session.close();
@@ -131,10 +136,68 @@ async function getNeo4SnapshotInsights() {
   }
 }
 
+async function syncNeo4Adopters(adopters) {
+  const session = driver.session({ database: NEO4J_DATABASE });
+
+  try {
+    const currentIds = adopters.map(a => a.discordUserId);
+
+    const { newCount, continuingCount, stoppedCount } = await session.executeWrite(async tx => {
+      const existingResult = await tx.run(
+        `MATCH (u:Neo4Adopter) RETURN u.discordUserId AS discordUserId`
+      );
+
+      const existingIds = new Set(
+        existingResult.records.map(record => record.get("discordUserId"))
+      );
+
+      const newCount = adopters.filter(a => !existingIds.has(a.discordUserId)).length;
+      const continuingCount = adopters.length - newCount;
+
+      await tx.run(
+        `UNWIND $adopters AS adopter
+         MERGE (u:Neo4Adopter {discordUserId: adopter.discordUserId})
+         ON CREATE SET
+           u.firstSeen = datetime(),
+           u.tagName = "NEO4"
+         SET
+           u.username = adopter.username,
+           u.displayName = adopter.displayName,
+           u.lastSeen = datetime(),
+           u.active = true`,
+        { adopters }
+      );
+
+      const stoppedResult = await tx.run(
+        `MATCH (u:Neo4Adopter {active: true})
+         WHERE NOT u.discordUserId IN $currentIds
+         SET u.active = false
+         RETURN count(u) AS stoppedCount`,
+        { currentIds }
+      );
+
+      const stoppedCount = stoppedResult.records[0].get("stoppedCount").toNumber();
+
+      return { newCount, continuingCount, stoppedCount };
+    });
+
+    console.log(
+      `[NEO4 adopters] current=${adopters.length} new=${newCount} ` +
+      `continuing=${continuingCount} stopped=${stoppedCount}`
+    );
+  } catch (error) {
+    console.error("Neo4j error while syncing NEO4 adopters:", error);
+    throw error;
+  } finally {
+    await session.close();
+  }
+}
+
 module.exports = {
   driver,
   verifyConnectivity,
-  ensureNeo4Constraint,
+  ensureNeo4Constraints,
   recordNeo4Snapshot,
-  getNeo4SnapshotInsights
+  getNeo4SnapshotInsights,
+  syncNeo4Adopters
 };

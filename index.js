@@ -12,9 +12,10 @@ const {
 
 const {
   verifyConnectivity,
-  ensureNeo4Constraint,
+  ensureNeo4Constraints,
   recordNeo4Snapshot,
-  getNeo4SnapshotInsights
+  getNeo4SnapshotInsights,
+  syncNeo4Adopters
 } = require("./neo4j");
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
@@ -64,7 +65,7 @@ async function computeNeo4Stats(guild) {
   const adopterCount = adopters.length;
   const rate = total ? (adopterCount / total) * 100 : 0;
 
-  return { total, adopterCount, rate, roleCounts };
+  return { total, adopterCount, rate, roleCounts, adopters };
 }
 
 function scheduleNeo4Snapshots(guild) {
@@ -73,7 +74,7 @@ function scheduleNeo4Snapshots(guild) {
     console.log(`[NEO4 snapshot] Job starting at ${startedAt}`);
 
     try {
-      const { total, adopterCount, rate } = await computeNeo4Stats(guild);
+      const { total, adopterCount, rate, adopters } = await computeNeo4Stats(guild);
       const adoptionRate = Number(rate.toFixed(2));
 
       console.log(`[NEO4 snapshot] Discord member count: ${total}`);
@@ -85,6 +86,14 @@ function scheduleNeo4Snapshots(guild) {
         adopters: adopterCount,
         adoptionRate
       });
+
+      const adopterRecords = adopters.map(member => ({
+        discordUserId: member.id,
+        username: member.user.username,
+        displayName: member.displayName
+      }));
+
+      await syncNeo4Adopters(adopterRecords);
     } catch (error) {
       console.error("[NEO4 snapshot] Failed to record snapshot:", error);
     }
@@ -102,8 +111,8 @@ client.once(Events.ClientReady, async readyClient => {
     await verifyConnectivity();
     console.log("Connected to Neo4j.");
 
-    await ensureNeo4Constraint();
-    console.log("NEO4 snapshot constraint ensured.");
+    await ensureNeo4Constraints();
+    console.log("NEO4 constraints ensured.");
   } catch (error) {
     console.error("Failed to initialize Neo4j:", error);
   }

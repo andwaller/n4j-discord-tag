@@ -90,7 +90,8 @@ function scheduleNeo4Snapshots(guild) {
       const adopterRecords = adopters.map(member => ({
         discordUserId: member.id,
         username: member.user.username,
-        displayName: member.displayName
+        displayName: member.displayName,
+        guildJoinedAt: member.joinedAt ? member.joinedAt.toISOString() : null
       }));
 
       await syncNeo4Adopters(adopterRecords);

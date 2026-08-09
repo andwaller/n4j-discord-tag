@@ -163,6 +163,7 @@ async function syncNeo4Adopters(adopters) {
          SET
            u.username = adopter.username,
            u.displayName = adopter.displayName,
+           u.guildJoinedAt = datetime(adopter.guildJoinedAt),
            u.lastSeen = datetime(),
            u.active = true`,
         { adopters }

@@ -12,9 +12,9 @@ const {
 
 const {
   verifyConnectivity,
-  ensureBaselineSnapshot,
-  recordDailySnapshot,
-  getSnapshotInsights
+  ensureNeo4Constraint,
+  recordNeo4Snapshot,
+  getNeo4SnapshotInsights
 } = require("./neo4j");
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
@@ -28,11 +28,11 @@ const client = new Client({
 
 const commands = [
   new SlashCommandBuilder()
-    .setName("n4j-stats")
-    .setDescription("Show Neo4j Server Tag adoption statistics")
+    .setName("neo4-stats")
+    .setDescription("Show NEO4 Server Tag adoption statistics")
 ].map(command => command.toJSON());
 
-async function computeN4jStats(guild) {
+async function computeNeo4Stats(guild) {
   const members = await guild.members.fetch();
 
   const adopters = [];
@@ -41,12 +41,12 @@ async function computeN4jStats(guild) {
   for (const member of members.values()) {
     const primaryGuild = member.user.primaryGuild;
 
-    const usesN4J =
+    const usesNeo4Tag =
       primaryGuild &&
       primaryGuild.identityGuildId === guild.id &&
       primaryGuild.identityEnabled;
 
-    if (!usesN4J) continue;
+    if (!usesNeo4Tag) continue;
 
     adopters.push(member);
 
@@ -67,21 +67,30 @@ async function computeN4jStats(guild) {
   return { total, adopterCount, rate, roleCounts };
 }
 
-function scheduleDailySnapshots(guild) {
+function scheduleNeo4Snapshots(guild) {
   const runSnapshot = async () => {
-    try {
-      const { total, adopterCount, rate } = await computeN4jStats(guild);
+    const startedAt = new Date().toISOString();
+    console.log(`[NEO4 snapshot] Job starting at ${startedAt}`);
 
-      await recordDailySnapshot({
+    try {
+      const { total, adopterCount, rate } = await computeNeo4Stats(guild);
+      const adoptionRate = Number(rate.toFixed(2));
+
+      console.log(`[NEO4 snapshot] Discord member count: ${total}`);
+      console.log(`[NEO4 snapshot] NEO4 adopter count: ${adopterCount}`);
+      console.log(`[NEO4 snapshot] Adoption rate: ${adoptionRate}%`);
+
+      await recordNeo4Snapshot({
         totalMembers: total,
         adopters: adopterCount,
-        adoptionRate: Number(rate.toFixed(2))
+        adoptionRate
       });
     } catch (error) {
-      console.error("Failed to record daily N4J snapshot:", error);
+      console.error("[NEO4 snapshot] Failed to record snapshot:", error);
     }
   };
 
+  console.log("Scheduling NEO4 snapshots: once now, then every 24 hours.");
   runSnapshot();
   setInterval(runSnapshot, ONE_DAY_MS);
 }
@@ -93,8 +102,8 @@ client.once(Events.ClientReady, async readyClient => {
     await verifyConnectivity();
     console.log("Connected to Neo4j.");
 
-    await ensureBaselineSnapshot();
-    console.log("Neo4j baseline snapshot ensured.");
+    await ensureNeo4Constraint();
+    console.log("NEO4 snapshot constraint ensured.");
   } catch (error) {
     console.error("Failed to initialize Neo4j:", error);
   }
@@ -112,7 +121,7 @@ client.once(Events.ClientReady, async readyClient => {
     .setToken(process.env.DISCORD_TOKEN);
 
   try {
-    console.log("Registering /n4j-stats command...");
+    console.log("Registering /neo4-stats command...");
 
     await rest.put(
       Routes.applicationGuildCommands(
@@ -122,17 +131,17 @@ client.once(Events.ClientReady, async readyClient => {
       { body: commands }
     );
 
-    console.log("/n4j-stats registered successfully.");
+    console.log("/neo4-stats registered successfully.");
   } catch (error) {
     console.error("Failed to register command:", error);
   }
 
-  scheduleDailySnapshots(guild);
+  scheduleNeo4Snapshots(guild);
 });
 
 client.on(Events.InteractionCreate, async interaction => {
   if (!interaction.isChatInputCommand()) return;
-  if (interaction.commandName !== "n4j-stats") return;
+  if (interaction.commandName !== "neo4-stats") return;
 
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
@@ -146,10 +155,10 @@ client.on(Events.InteractionCreate, async interaction => {
       return;
     }
 
-    const { total, adopterCount, rate, roleCounts } = await computeN4jStats(guild);
+    const { total, adopterCount, rate, roleCounts } = await computeNeo4Stats(guild);
     const rateDisplay = rate.toFixed(2);
 
-    // Only show roles held by at least 2 N4J adopters.
+    // Only show roles held by at least 2 NEO4 adopters.
     // This removes most one-off/noisy roles.
     const significantRoles = [...roleCounts.entries()]
       .filter(([, count]) => count >= 2)
@@ -166,9 +175,9 @@ client.on(Events.InteractionCreate, async interaction => {
     let insights = null;
 
     try {
-      insights = await getSnapshotInsights();
+      insights = await getNeo4SnapshotInsights();
     } catch (error) {
-      console.error("Failed to load N4J snapshot history:", error);
+      console.error("Failed to load NEO4 snapshot history:", error);
     }
 
     let historyText = "_Historical comparison unavailable._";
@@ -207,16 +216,16 @@ client.on(Events.InteractionCreate, async interaction => {
     const timestamp = Math.floor(Date.now() / 1000);
 
     const report =
-`⚡ **N4J Server Tag Report**
+`⚡ **NEO4 Server Tag Report**
 
-**${adopterCount.toLocaleString()}** members currently display N4J
+**${adopterCount.toLocaleString()}** members currently display NEO4
 
 👥 Total server members: **${total.toLocaleString()}**
 📊 Adoption rate: **${rateDisplay}%**
 
 ${historyText}
 
-**N4J adopters by role**
+**NEO4 adopters by role**
 ${roleText}
 
 _Last updated <t:${timestamp}:f>_`;
@@ -224,10 +233,10 @@ _Last updated <t:${timestamp}:f>_`;
     await interaction.editReply(report);
 
   } catch (error) {
-    console.error("Error generating N4J stats:", error);
+    console.error("Error generating NEO4 stats:", error);
 
     await interaction.editReply(
-      "There was an error generating the N4J Server Tag report."
+      "There was an error generating the NEO4 Server Tag report."
     );
   }
 });

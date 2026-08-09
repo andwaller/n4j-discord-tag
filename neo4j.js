@@ -16,78 +16,84 @@ async function verifyConnectivity() {
   await driver.verifyConnectivity({ database: NEO4J_DATABASE });
 }
 
-async function ensureBaselineSnapshot() {
+async function ensureNeo4Constraint() {
   const session = driver.session({ database: NEO4J_DATABASE });
 
   try {
     await session.run(
-      `CREATE CONSTRAINT n4j_snapshot_date_unique IF NOT EXISTS
-       FOR (s:N4JSnapshot) REQUIRE s.date IS UNIQUE`
-    );
-
-    await session.run(
-      `MERGE (s:N4JSnapshot {date: date($date)})
-       SET s.totalMembers = $totalMembers,
-           s.adopters = $adopters,
-           s.adoptionRate = $adoptionRate,
-           s.baseline = true,
-           s.label = $label`,
-      {
-        date: "2026-08-07",
-        totalMembers: neo4j.int(10212),
-        adopters: neo4j.int(15),
-        adoptionRate: 0.15,
-        label: "Pre-promotion baseline"
-      }
+      `CREATE CONSTRAINT neo4_snapshot_date_unique IF NOT EXISTS
+       FOR (s:Neo4Snapshot) REQUIRE s.date IS UNIQUE`
     );
   } finally {
     await session.close();
   }
 }
 
-async function recordDailySnapshot({ totalMembers, adopters, adoptionRate }) {
+async function recordNeo4Snapshot({ totalMembers, adopters, adoptionRate }) {
   const date = new Date().toISOString().slice(0, 10);
   const session = driver.session({ database: NEO4J_DATABASE });
 
   try {
-    // The WHERE guard skips the update when the matched node is the
-    // existing baseline snapshot (e.g. a daily run landing on the
-    // baseline's own date), so the baseline is never overwritten.
-    const result = await session.run(
-      `MERGE (s:N4JSnapshot {date: date($date)})
-       ON CREATE SET s.createdAt = datetime()
-       WITH s
-       WHERE s.baseline IS NULL OR s.baseline = false
-       SET s.totalMembers = $totalMembers,
-           s.adopters = $adopters,
-           s.adoptionRate = $adoptionRate
-       RETURN s`,
-      {
-        date,
-        totalMembers: neo4j.int(totalMembers),
-        adopters: neo4j.int(adopters),
-        adoptionRate
-      }
-    );
+    // Runs the baseline check and the upsert in a single managed transaction
+    // so a snapshot can only ever be marked baseline once, even though this
+    // only ever runs from a single scheduled job.
+    const result = await session.executeWrite(async tx => {
+      const baselineCheck = await tx.run(
+        `MATCH (b:Neo4Snapshot {baseline: true}) RETURN count(b) AS baselineCount`
+      );
+
+      const baselineCount = baselineCheck.records[0].get("baselineCount").toNumber();
+
+      return tx.run(
+        `MERGE (s:Neo4Snapshot {date: date($date)})
+         ON CREATE SET s.createdAt = datetime(), s.tagName = $tagName
+         SET s.totalMembers = $totalMembers,
+             s.adopters = $adopters,
+             s.adoptionRate = $adoptionRate,
+             s.baseline = CASE
+               WHEN s.baseline IS NULL AND $baselineCount = 0 THEN true
+               ELSE coalesce(s.baseline, false)
+             END
+         RETURN s`,
+        {
+          date,
+          tagName: "NEO4",
+          totalMembers: neo4j.int(totalMembers),
+          adopters: neo4j.int(adopters),
+          adoptionRate,
+          baselineCount: neo4j.int(baselineCount)
+        }
+      );
+    });
 
     if (result.records.length === 0) {
-      console.log(
-        `Skipped daily N4J snapshot for ${date}: baseline snapshot already exists for this date.`
+      console.error(
+        `Neo4j write for NEO4 snapshot on ${date} returned no rows. The write may not have been saved.`
       );
-    } else {
-      console.log(`Recorded daily N4J snapshot for ${date}.`);
+      return;
     }
+
+    const saved = result.records[0].get("s").properties;
+
+    console.log(
+      `Saved NEO4 snapshot for ${date} at ${new Date().toISOString()}: ` +
+      `totalMembers=${saved.totalMembers}, adopters=${saved.adopters}, ` +
+      `adoptionRate=${saved.adoptionRate}%, baseline=${saved.baseline}`
+    );
+  } catch (error) {
+    console.error(`Neo4j error while saving NEO4 snapshot for ${date}:`, error);
+    throw error;
   } finally {
     await session.close();
   }
 }
 
-async function getSnapshotInsights() {
+async function getNeo4SnapshotInsights() {
   const session = driver.session({ database: NEO4J_DATABASE });
 
   try {
     const baselineResult = await session.run(
-      `MATCH (b:N4JSnapshot {baseline: true})
+      `MATCH (b:Neo4Snapshot {baseline: true})
        RETURN b.date AS date, b.adopters AS adopters, b.adoptionRate AS adoptionRate
        LIMIT 1`
     );
@@ -103,7 +109,7 @@ async function getSnapshotInsights() {
       : null;
 
     const weekAgoResult = await session.run(
-      `MATCH (s:N4JSnapshot)
+      `MATCH (s:Neo4Snapshot)
        WHERE s.date <= date() - duration({days: 7})
        RETURN s.date AS date, s.adopters AS adopters
        ORDER BY s.date DESC
@@ -128,7 +134,7 @@ async function getSnapshotInsights() {
 module.exports = {
   driver,
   verifyConnectivity,
-  ensureBaselineSnapshot,
-  recordDailySnapshot,
-  getSnapshotInsights
+  ensureNeo4Constraint,
+  recordNeo4Snapshot,
+  getNeo4SnapshotInsights
 };

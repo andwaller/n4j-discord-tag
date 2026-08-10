@@ -238,12 +238,15 @@ client.on(Events.GuildMemberAdd, async member => {
 });
 
 client.on(Events.InteractionCreate, async interaction => {
-  if (!interaction.isChatInputCommand()) return;
+  if (interaction.isChatInputCommand()) {
+    const command = commandsByName.get(interaction.commandName);
+    if (command) await command.execute(interaction);
+    return;
+  }
 
-  const command = commandsByName.get(interaction.commandName);
-  if (!command) return;
-
-  await command.execute(interaction);
+  if (interaction.isButton() && interaction.customId.startsWith("dmrole:")) {
+    await dmRole.handleButton(interaction);
+  }
 });
 
 client.login(process.env.DISCORD_TOKEN);

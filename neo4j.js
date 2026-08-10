@@ -534,6 +534,61 @@ async function getReferralConversionRate() {
   }
 }
 
+async function recordDmCampaign({
+  campaignName,
+  roleId,
+  roleName,
+  startedAt,
+  completedAt,
+  eligible,
+  delivered,
+  failed,
+  skipped,
+  initiatingAdminId
+}) {
+  const session = driver.session({ database: NEO4J_DATABASE });
+
+  try {
+    // Message body is intentionally never written here.
+    await session.run(
+      `CREATE (c:DMCampaign {
+         campaignName: $campaignName,
+         roleId: $roleId,
+         roleName: $roleName,
+         startedAt: datetime($startedAt),
+         completedAt: datetime($completedAt),
+         eligible: $eligible,
+         delivered: $delivered,
+         failed: $failed,
+         skipped: $skipped,
+         initiatingAdminId: $initiatingAdminId
+       })`,
+      {
+        campaignName,
+        roleId,
+        roleName,
+        startedAt,
+        completedAt,
+        eligible: neo4j.int(eligible),
+        delivered: neo4j.int(delivered),
+        failed: neo4j.int(failed),
+        skipped: neo4j.int(skipped),
+        initiatingAdminId
+      }
+    );
+
+    console.log(
+      `[NEO4 dm-role] Logged campaign "${campaignName}" (role=${roleName}): ` +
+      `eligible=${eligible} delivered=${delivered} failed=${failed} skipped=${skipped}`
+    );
+  } catch (error) {
+    console.error(`Neo4j error while logging DM campaign "${campaignName}":`, error);
+    throw error;
+  } finally {
+    await session.close();
+  }
+}
+
 module.exports = {
   driver,
   verifyConnectivity,
@@ -553,5 +608,6 @@ module.exports = {
   recordNeo4Member,
   recordNeo4Referral,
   getTopReferrers,
-  getReferralConversionRate
+  getReferralConversionRate,
+  recordDmCampaign
 };

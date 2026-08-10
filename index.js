@@ -16,6 +16,7 @@ const {
   ensureNeo4TagInfo,
   recordNeo4Snapshot,
   recordNeo4RoleSnapshot,
+  recordNeo4DailyAdopterStatus,
   getNeo4SnapshotInsights,
   syncNeo4Adopters
 } = require("./neo4j");
@@ -98,6 +99,8 @@ function scheduleNeo4Snapshots(guild) {
       }));
 
       await syncNeo4Adopters(adopterRecords);
+
+      await recordNeo4DailyAdopterStatus(date);
 
       const roleRecords = [...roleCounts.entries()].map(([roleName, count]) => ({
         roleName,

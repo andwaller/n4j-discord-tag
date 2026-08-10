@@ -39,6 +39,11 @@ async function ensureNeo4Constraints() {
       `CREATE CONSTRAINT neo4_tag_info_unique IF NOT EXISTS
        FOR (t:Neo4TagInfo) REQUIRE t.tagName IS UNIQUE`
     );
+
+    await session.run(
+      `CREATE CONSTRAINT neo4_adopter_daily_status_unique IF NOT EXISTS
+       FOR (d:Neo4AdopterDailyStatus) REQUIRE (d.date, d.discordUserId) IS UNIQUE`
+    );
   } finally {
     await session.close();
   }
@@ -347,6 +352,82 @@ async function getReactivationHistory() {
   }
 }
 
+async function recordNeo4DailyAdopterStatus(date) {
+  const session = driver.session({ database: NEO4J_DATABASE });
+
+  try {
+    const result = await session.run(
+      `MATCH (u:Neo4Adopter)
+       MERGE (d:Neo4AdopterDailyStatus {date: date($date), discordUserId: u.discordUserId})
+       ON CREATE SET d.tagName = "NEO4"
+       SET d.active = u.active
+       RETURN count(CASE WHEN d.active THEN 1 END) AS activeCount,
+              count(CASE WHEN NOT d.active THEN 1 END) AS inactiveCount`,
+      { date }
+    );
+
+    const record = result.records[0];
+    const activeCount = record.get("activeCount").toNumber();
+    const inactiveCount = record.get("inactiveCount").toNumber();
+
+    console.log(
+      `[NEO4 daily status] Saved daily status for ${date}: ${activeCount} active, ${inactiveCount} inactive.`
+    );
+  } catch (error) {
+    console.error(`Neo4j error while saving NEO4 daily status for ${date}:`, error);
+    throw error;
+  } finally {
+    await session.close();
+  }
+}
+
+async function getAdoptersOnDate(date) {
+  const session = driver.session({ database: NEO4J_DATABASE });
+
+  try {
+    const result = await session.run(
+      `MATCH (d:Neo4AdopterDailyStatus {date: date($date), active: true})
+       MATCH (u:Neo4Adopter {discordUserId: d.discordUserId})
+       RETURN u.username AS username, u.displayName AS displayName
+       ORDER BY u.username`,
+      { date }
+    );
+
+    return result.records.map(record => ({
+      username: record.get("username"),
+      displayName: record.get("displayName")
+    }));
+  } finally {
+    await session.close();
+  }
+}
+
+async function getAbandonedOnDate(date) {
+  const session = driver.session({ database: NEO4J_DATABASE });
+
+  try {
+    const result = await session.run(
+      `MATCH (today:Neo4AdopterDailyStatus {date: date($date), active: false})
+       MATCH (yesterday:Neo4AdopterDailyStatus {
+         discordUserId: today.discordUserId,
+         date: date($date) - duration({days: 1}),
+         active: true
+       })
+       MATCH (u:Neo4Adopter {discordUserId: today.discordUserId})
+       RETURN u.username AS username, u.displayName AS displayName
+       ORDER BY u.username`,
+      { date }
+    );
+
+    return result.records.map(record => ({
+      username: record.get("username"),
+      displayName: record.get("displayName")
+    }));
+  } finally {
+    await session.close();
+  }
+}
+
 module.exports = {
   driver,
   verifyConnectivity,
@@ -354,10 +435,13 @@ module.exports = {
   ensureNeo4TagInfo,
   recordNeo4Snapshot,
   recordNeo4RoleSnapshot,
+  recordNeo4DailyAdopterStatus,
   getNeo4SnapshotInsights,
   syncNeo4Adopters,
   getDaysToAdopt,
   getNeo4AdoptionTrend,
   getOrganicAdoptionProof,
-  getReactivationHistory
+  getReactivationHistory,
+  getAdoptersOnDate,
+  getAbandonedOnDate
 };

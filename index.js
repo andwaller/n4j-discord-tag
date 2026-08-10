@@ -5,10 +5,7 @@ const {
   GatewayIntentBits,
   REST,
   Routes,
-  SlashCommandBuilder,
-  Events,
-  MessageFlags,
-  PermissionFlagsBits
+  Events
 } = require("discord.js");
 
 const {
@@ -18,14 +15,13 @@ const {
   recordNeo4Snapshot,
   recordNeo4RoleSnapshot,
   recordNeo4DailyAdopterStatus,
-  getNeo4SnapshotInsights,
   syncNeo4Adopters,
-  getDaysToAdopt,
-  getOrganicAdoptionProof,
-  getReactivationHistory,
   recordNeo4Member,
   recordNeo4Referral
 } = require("./neo4j");
+
+const neo4Stats = require("./commands/neo4-stats");
+const dmRole = require("./commands/dm-role");
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -74,47 +70,12 @@ const client = new Client({
   ]
 });
 
-const commands = [
-  new SlashCommandBuilder()
-    .setName("neo4-stats")
-    .setDescription("Show NEO4 Server Tag adoption statistics")
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
-].map(command => command.toJSON());
+const commandModules = [neo4Stats, dmRole];
+const commandsByName = new Map(
+  commandModules.map(module => [module.data.name, module])
+);
 
-async function computeNeo4Stats(guild) {
-  const members = await guild.members.fetch();
-
-  const adopters = [];
-  const roleCounts = new Map();
-
-  for (const member of members.values()) {
-    const primaryGuild = member.user.primaryGuild;
-
-    const usesNeo4Tag =
-      primaryGuild &&
-      primaryGuild.identityGuildId === guild.id &&
-      primaryGuild.identityEnabled;
-
-    if (!usesNeo4Tag) continue;
-
-    adopters.push(member);
-
-    for (const role of member.roles.cache.values()) {
-      if (role.id === guild.id) continue;
-
-      roleCounts.set(
-        role.name,
-        (roleCounts.get(role.name) || 0) + 1
-      );
-    }
-  }
-
-  const total = members.size;
-  const adopterCount = adopters.length;
-  const rate = total ? (adopterCount / total) * 100 : 0;
-
-  return { total, adopterCount, rate, roleCounts, adopters };
-}
+const commands = commandModules.map(module => module.data.toJSON());
 
 function scheduleNeo4Snapshots(guild) {
   const runSnapshot = async () => {
@@ -122,7 +83,7 @@ function scheduleNeo4Snapshots(guild) {
     console.log(`[NEO4 snapshot] Job starting at ${startedAt}`);
 
     try {
-      const { total, adopterCount, rate, roleCounts, adopters } = await computeNeo4Stats(guild);
+      const { total, adopterCount, rate, roleCounts, adopters } = await neo4Stats.computeNeo4Stats(guild);
       const adoptionRate = Number(rate.toFixed(2));
       const date = new Date().toISOString().slice(0, 10);
 
@@ -203,7 +164,7 @@ client.once(Events.ClientReady, async readyClient => {
     .setToken(process.env.DISCORD_TOKEN);
 
   try {
-    console.log("Registering /neo4-stats command...");
+    console.log("Registering slash commands...");
 
     await rest.put(
       Routes.applicationGuildCommands(
@@ -213,7 +174,7 @@ client.once(Events.ClientReady, async readyClient => {
       { body: commands }
     );
 
-    console.log("/neo4-stats registered successfully.");
+    console.log("Slash commands registered successfully.");
   } catch (error) {
     console.error("Failed to register command:", error);
   }
@@ -278,144 +239,11 @@ client.on(Events.GuildMemberAdd, async member => {
 
 client.on(Events.InteractionCreate, async interaction => {
   if (!interaction.isChatInputCommand()) return;
-  if (interaction.commandName !== "neo4-stats") return;
 
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  const command = commandsByName.get(interaction.commandName);
+  if (!command) return;
 
-  try {
-    const guild = interaction.guild;
-
-    if (!guild) {
-      await interaction.editReply(
-        "This command must be run inside the Neo4j server."
-      );
-      return;
-    }
-
-    const { total, adopterCount, rate, roleCounts } = await computeNeo4Stats(guild);
-    const rateDisplay = rate.toFixed(2);
-
-    // Only show roles held by at least 2 NEO4 adopters.
-    // This removes most one-off/noisy roles.
-    const significantRoles = [...roleCounts.entries()]
-      .filter(([, count]) => count >= 2)
-      .sort((a, b) => b[1] - a[1]);
-
-    let roleText = "No shared roles found.";
-
-    if (significantRoles.length > 0) {
-      roleText = significantRoles
-        .map(([role, count]) => `• **${role}:** ${count}`)
-        .join("\n");
-    }
-
-    let insights = null;
-
-    try {
-      insights = await getNeo4SnapshotInsights();
-    } catch (error) {
-      console.error("Failed to load NEO4 snapshot history:", error);
-    }
-
-    let historyText = "_Historical comparison unavailable._";
-
-    if (insights && insights.baseline) {
-      const { baseline, weekAgo } = insights;
-
-      const sign = n => (n >= 0 ? "+" : "");
-
-      const adopterDelta = adopterCount - baseline.adopters;
-
-      const growthPct = baseline.adopters > 0
-        ? ((adopterCount - baseline.adopters) / baseline.adopters) * 100
-        : null;
-
-      const rateDelta = Number(rateDisplay) - baseline.adoptionRate;
-
-      const lines = [
-        `📌 Baseline (**${baseline.date}**): **${baseline.adopters.toLocaleString()}** adopters`,
-        `📈 Change since baseline: **${sign(adopterDelta)}${adopterDelta.toLocaleString()}** adopters` +
-          (growthPct !== null ? ` (**${sign(growthPct)}${growthPct.toFixed(2)}%**)` : ""),
-        `📊 Adoption rate change since baseline: **${sign(rateDelta)}${rateDelta.toFixed(2)} pts**`
-      ];
-
-      if (weekAgo) {
-        const weekDelta = adopterCount - weekAgo.adopters;
-
-        lines.push(
-          `🗓️ Change vs ~7 days ago (**${weekAgo.date}**): **${sign(weekDelta)}${weekDelta.toLocaleString()}** adopters`
-        );
-      }
-
-      historyText = lines.join("\n");
-    }
-
-    let growthText = "";
-
-    try {
-      const [organicProof, daysToAdopt, reactivations] = await Promise.all([
-        getOrganicAdoptionProof(),
-        getDaysToAdopt(),
-        getReactivationHistory()
-      ]);
-
-      const growthLines = [];
-
-      if (organicProof) {
-        growthLines.push(
-          `🌱 **${organicProof.adoptersAtFirstMeasurement.toLocaleString()}** adopted with zero promotion, ` +
-          `within **${organicProof.daysUnmeasuredBeforeBaseline}** day(s) of launch (**${organicProof.tagAvailableSince}**) ` +
-          `— before this bot could even measure it`
-        );
-      }
-
-      if (daysToAdopt.length > 0) {
-        const avgDays = daysToAdopt.reduce((sum, a) => sum + a.daysToAdopt, 0) / daysToAdopt.length;
-
-        growthLines.push(
-          `⏱️ Average days to adopt NEO4, for members who joined since launch: **${avgDays.toFixed(1)}**`
-        );
-      }
-
-      if (reactivations.length > 0) {
-        growthLines.push(
-          `🔁 **${reactivations.length}** adopter(s) have re-adopted NEO4 after dropping it`
-        );
-      }
-
-      if (growthLines.length > 0) {
-        growthText = `\n\n**Growth insights**\n${growthLines.join("\n")}`;
-      }
-    } catch (error) {
-      console.error("Failed to load NEO4 growth insights:", error);
-    }
-
-    const timestamp = Math.floor(Date.now() / 1000);
-
-    const report =
-`⚡ **NEO4 Server Tag Report**
-
-**${adopterCount.toLocaleString()}** members currently display NEO4
-
-👥 Total server members: **${total.toLocaleString()}**
-📊 Adoption rate: **${rateDisplay}%**
-
-${historyText}
-
-**NEO4 adopters by role**
-${roleText}${growthText}
-
-_Last updated <t:${timestamp}:f>_`;
-
-    await interaction.editReply(report);
-
-  } catch (error) {
-    console.error("Error generating NEO4 stats:", error);
-
-    await interaction.editReply(
-      "There was an error generating the NEO4 Server Tag report."
-    );
-  }
+  await command.execute(interaction);
 });
 
 client.login(process.env.DISCORD_TOKEN);

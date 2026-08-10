@@ -29,6 +29,29 @@ async function ensureNeo4Constraints() {
       `CREATE CONSTRAINT neo4_adopter_discord_user_id_unique IF NOT EXISTS
        FOR (u:Neo4Adopter) REQUIRE u.discordUserId IS UNIQUE`
     );
+
+    await session.run(
+      `CREATE CONSTRAINT neo4_role_snapshot_unique IF NOT EXISTS
+       FOR (r:Neo4RoleSnapshot) REQUIRE (r.date, r.roleName) IS UNIQUE`
+    );
+
+    await session.run(
+      `CREATE CONSTRAINT neo4_tag_info_unique IF NOT EXISTS
+       FOR (t:Neo4TagInfo) REQUIRE t.tagName IS UNIQUE`
+    );
+  } finally {
+    await session.close();
+  }
+}
+
+async function ensureNeo4TagInfo() {
+  const session = driver.session({ database: NEO4J_DATABASE });
+
+  try {
+    await session.run(
+      `MERGE (t:Neo4TagInfo {tagName: "NEO4"})
+       ON CREATE SET t.availableSince = date("2026-08-05")`
+    );
   } finally {
     await session.close();
   }
@@ -142,7 +165,7 @@ async function syncNeo4Adopters(adopters) {
   try {
     const currentIds = adopters.map(a => a.discordUserId);
 
-    const { newCount, continuingCount, stoppedCount } = await session.executeWrite(async tx => {
+    const { newCount, continuingCount, stoppedCount, reactivatedCount } = await session.executeWrite(async tx => {
       const existingResult = await tx.run(
         `MATCH (u:Neo4Adopter) RETURN u.discordUserId AS discordUserId`
       );
@@ -154,20 +177,29 @@ async function syncNeo4Adopters(adopters) {
       const newCount = adopters.filter(a => !existingIds.has(a.discordUserId)).length;
       const continuingCount = adopters.length - newCount;
 
-      await tx.run(
+      const upsertResult = await tx.run(
         `UNWIND $adopters AS adopter
          MERGE (u:Neo4Adopter {discordUserId: adopter.discordUserId})
          ON CREATE SET
            u.firstSeen = datetime(),
-           u.tagName = "NEO4"
+           u.tagName = "NEO4",
+           u.timesReactivated = 0
+         WITH u, adopter, coalesce(u.active, true) AS wasActive
          SET
            u.username = adopter.username,
            u.displayName = adopter.displayName,
            u.guildJoinedAt = datetime(adopter.guildJoinedAt),
+           u.timesReactivated = CASE
+             WHEN wasActive = false THEN coalesce(u.timesReactivated, 0) + 1
+             ELSE coalesce(u.timesReactivated, 0)
+           END,
            u.lastSeen = datetime(),
-           u.active = true`,
+           u.active = true
+         RETURN count(CASE WHEN wasActive = false THEN 1 END) AS reactivatedCount`,
         { adopters }
       );
+
+      const reactivatedCount = upsertResult.records[0].get("reactivatedCount").toNumber();
 
       const stoppedResult = await tx.run(
         `MATCH (u:Neo4Adopter {active: true})
@@ -179,12 +211,12 @@ async function syncNeo4Adopters(adopters) {
 
       const stoppedCount = stoppedResult.records[0].get("stoppedCount").toNumber();
 
-      return { newCount, continuingCount, stoppedCount };
+      return { newCount, continuingCount, stoppedCount, reactivatedCount };
     });
 
     console.log(
       `[NEO4 adopters] current=${adopters.length} new=${newCount} ` +
-      `continuing=${continuingCount} stopped=${stoppedCount}`
+      `continuing=${continuingCount} reactivated=${reactivatedCount} stopped=${stoppedCount}`
     );
   } catch (error) {
     console.error("Neo4j error while syncing NEO4 adopters:", error);
@@ -194,11 +226,138 @@ async function syncNeo4Adopters(adopters) {
   }
 }
 
+async function recordNeo4RoleSnapshot(date, roles) {
+  const session = driver.session({ database: NEO4J_DATABASE });
+
+  try {
+    await session.run(
+      `UNWIND $roles AS role
+       MERGE (r:Neo4RoleSnapshot {date: date($date), roleName: role.roleName})
+       ON CREATE SET r.createdAt = datetime(), r.tagName = "NEO4"
+       SET r.adopterCount = role.adopterCount`,
+      { date, roles }
+    );
+
+    console.log(`Saved NEO4 role snapshot for ${date}: ${roles.length} role(s).`);
+  } catch (error) {
+    console.error(`Neo4j error while saving NEO4 role snapshot for ${date}:`, error);
+    throw error;
+  } finally {
+    await session.close();
+  }
+}
+
+async function getDaysToAdopt() {
+  const session = driver.session({ database: NEO4J_DATABASE });
+
+  try {
+    const result = await session.run(
+      `MATCH (u:Neo4Adopter {active: true})
+       RETURN u.username AS username,
+              u.guildJoinedAt AS guildJoinedAt,
+              u.firstSeen AS firstSeen,
+              duration.between(date(u.guildJoinedAt), date(u.firstSeen)).days AS daysToAdopt
+       ORDER BY daysToAdopt`
+    );
+
+    return result.records.map(record => ({
+      username: record.get("username"),
+      guildJoinedAt: record.get("guildJoinedAt"),
+      firstSeen: record.get("firstSeen"),
+      daysToAdopt: record.get("daysToAdopt").toNumber()
+    }));
+  } finally {
+    await session.close();
+  }
+}
+
+async function getNeo4AdoptionTrend() {
+  const session = driver.session({ database: NEO4J_DATABASE });
+
+  try {
+    const result = await session.run(
+      `MATCH (t:Neo4TagInfo {tagName: "NEO4"})
+       MATCH (s:Neo4Snapshot)
+       RETURN t.availableSince AS tagAvailableSince,
+              s.date AS date,
+              s.totalMembers AS totalMembers,
+              s.adopters AS adopters,
+              s.adoptionRate AS adoptionRate
+       ORDER BY s.date ASC`
+    );
+
+    return result.records.map(record => ({
+      tagAvailableSince: record.get("tagAvailableSince").toString(),
+      date: record.get("date").toString(),
+      totalMembers: record.get("totalMembers").toNumber(),
+      adopters: record.get("adopters").toNumber(),
+      adoptionRate: record.get("adoptionRate")
+    }));
+  } finally {
+    await session.close();
+  }
+}
+
+async function getOrganicAdoptionProof() {
+  const session = driver.session({ database: NEO4J_DATABASE });
+
+  try {
+    const result = await session.run(
+      `MATCH (t:Neo4TagInfo {tagName: "NEO4"})
+       MATCH (b:Neo4Snapshot {baseline: true})
+       RETURN t.availableSince AS tagAvailableSince,
+              b.date AS firstMeasuredDate,
+              b.adopters AS adoptersAtFirstMeasurement,
+              duration.between(t.availableSince, b.date).days AS daysUnmeasuredBeforeBaseline`
+    );
+
+    const record = result.records[0];
+
+    if (!record) return null;
+
+    return {
+      tagAvailableSince: record.get("tagAvailableSince").toString(),
+      firstMeasuredDate: record.get("firstMeasuredDate").toString(),
+      adoptersAtFirstMeasurement: record.get("adoptersAtFirstMeasurement").toNumber(),
+      daysUnmeasuredBeforeBaseline: record.get("daysUnmeasuredBeforeBaseline").toNumber()
+    };
+  } finally {
+    await session.close();
+  }
+}
+
+async function getReactivationHistory() {
+  const session = driver.session({ database: NEO4J_DATABASE });
+
+  try {
+    const result = await session.run(
+      `MATCH (u:Neo4Adopter)
+       WHERE u.timesReactivated > 0
+       RETURN u.username AS username, u.displayName AS displayName, u.timesReactivated AS timesReactivated
+       ORDER BY u.timesReactivated DESC`
+    );
+
+    return result.records.map(record => ({
+      username: record.get("username"),
+      displayName: record.get("displayName"),
+      timesReactivated: record.get("timesReactivated").toNumber()
+    }));
+  } finally {
+    await session.close();
+  }
+}
+
 module.exports = {
   driver,
   verifyConnectivity,
   ensureNeo4Constraints,
+  ensureNeo4TagInfo,
   recordNeo4Snapshot,
+  recordNeo4RoleSnapshot,
   getNeo4SnapshotInsights,
-  syncNeo4Adopters
+  syncNeo4Adopters,
+  getDaysToAdopt,
+  getNeo4AdoptionTrend,
+  getOrganicAdoptionProof,
+  getReactivationHistory
 };

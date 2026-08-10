@@ -13,7 +13,9 @@ const {
 const {
   verifyConnectivity,
   ensureNeo4Constraints,
+  ensureNeo4TagInfo,
   recordNeo4Snapshot,
+  recordNeo4RoleSnapshot,
   getNeo4SnapshotInsights,
   syncNeo4Adopters
 } = require("./neo4j");
@@ -74,8 +76,9 @@ function scheduleNeo4Snapshots(guild) {
     console.log(`[NEO4 snapshot] Job starting at ${startedAt}`);
 
     try {
-      const { total, adopterCount, rate, adopters } = await computeNeo4Stats(guild);
+      const { total, adopterCount, rate, roleCounts, adopters } = await computeNeo4Stats(guild);
       const adoptionRate = Number(rate.toFixed(2));
+      const date = new Date().toISOString().slice(0, 10);
 
       console.log(`[NEO4 snapshot] Discord member count: ${total}`);
       console.log(`[NEO4 snapshot] NEO4 adopter count: ${adopterCount}`);
@@ -95,6 +98,13 @@ function scheduleNeo4Snapshots(guild) {
       }));
 
       await syncNeo4Adopters(adopterRecords);
+
+      const roleRecords = [...roleCounts.entries()].map(([roleName, count]) => ({
+        roleName,
+        adopterCount: count
+      }));
+
+      await recordNeo4RoleSnapshot(date, roleRecords);
     } catch (error) {
       console.error("[NEO4 snapshot] Failed to record snapshot:", error);
     }
@@ -114,6 +124,9 @@ client.once(Events.ClientReady, async readyClient => {
 
     await ensureNeo4Constraints();
     console.log("NEO4 constraints ensured.");
+
+    await ensureNeo4TagInfo();
+    console.log("NEO4 tag info ensured.");
   } catch (error) {
     console.error("Failed to initialize Neo4j:", error);
   }

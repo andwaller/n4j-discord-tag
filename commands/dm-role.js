@@ -186,8 +186,13 @@ async function sendCampaign(interaction, campaignId, state) {
     let eligibleMembers = [];
 
     if (role) {
-      const members = await guild.members.fetch();
-      eligibleMembers = [...members.values()].filter(
+      // Deliberately reads the cache rather than calling guild.members.fetch()
+      // again: execute() already did a full fetch moments ago for the preview,
+      // and a second full-guild member fetch this soon after trips Discord's
+      // gateway rate limit on REQUEST_GUILD_MEMBERS for large guilds. The
+      // GuildMembers intent keeps this cache live via gateway events in the
+      // meantime, so this still reflects current membership/role state.
+      eligibleMembers = [...guild.members.cache.values()].filter(
         member => member.roles.cache.has(role.id) && !member.user.bot
       );
     }

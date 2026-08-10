@@ -44,6 +44,11 @@ async function ensureNeo4Constraints() {
       `CREATE CONSTRAINT neo4_adopter_daily_status_unique IF NOT EXISTS
        FOR (d:Neo4AdopterDailyStatus) REQUIRE (d.date, d.discordUserId) IS UNIQUE`
     );
+
+    await session.run(
+      `CREATE CONSTRAINT neo4_member_discord_user_id_unique IF NOT EXISTS
+       FOR (m:Neo4Member) REQUIRE m.discordUserId IS UNIQUE`
+    );
   } finally {
     await session.close();
   }
@@ -428,6 +433,105 @@ async function getAbandonedOnDate(date) {
   }
 }
 
+async function recordNeo4Member(member) {
+  const session = driver.session({ database: NEO4J_DATABASE });
+
+  try {
+    await session.run(
+      `MERGE (m:Neo4Member {discordUserId: $discordUserId})
+       SET m.username = $username,
+           m.displayName = $displayName`,
+      member
+    );
+  } catch (error) {
+    console.error(`Neo4j error while recording Neo4Member ${member.discordUserId}:`, error);
+    throw error;
+  } finally {
+    await session.close();
+  }
+}
+
+async function recordNeo4Referral(inviter, newMember, inviteCode) {
+  const session = driver.session({ database: NEO4J_DATABASE });
+
+  try {
+    await session.run(
+      `MERGE (inviter:Neo4Member {discordUserId: $inviterId})
+       SET inviter.username = $inviterUsername,
+           inviter.displayName = $inviterDisplayName
+       WITH inviter
+       MATCH (newMember:Neo4Member {discordUserId: $newMemberId})
+       MERGE (inviter)-[r:REFERRED {inviteCode: $inviteCode}]->(newMember)
+       ON CREATE SET r.joinedAt = datetime()`,
+      {
+        inviterId: inviter.discordUserId,
+        inviterUsername: inviter.username,
+        inviterDisplayName: inviter.displayName,
+        newMemberId: newMember.discordUserId,
+        inviteCode
+      }
+    );
+
+    console.log(
+      `[NEO4 referral] ${inviter.username} referred ${newMember.username} via invite ${inviteCode}.`
+    );
+  } catch (error) {
+    console.error(
+      `Neo4j error while recording referral from ${inviter.discordUserId} to ${newMember.discordUserId}:`,
+      error
+    );
+    throw error;
+  } finally {
+    await session.close();
+  }
+}
+
+async function getTopReferrers() {
+  const session = driver.session({ database: NEO4J_DATABASE });
+
+  try {
+    const result = await session.run(
+      `MATCH (inviter:Neo4Member)-[r:REFERRED]->(newMember:Neo4Member)
+       RETURN inviter.username AS inviter, count(r) AS totalReferred
+       ORDER BY totalReferred DESC`
+    );
+
+    return result.records.map(record => ({
+      inviter: record.get("inviter"),
+      totalReferred: record.get("totalReferred").toNumber()
+    }));
+  } finally {
+    await session.close();
+  }
+}
+
+async function getReferralConversionRate() {
+  const session = driver.session({ database: NEO4J_DATABASE });
+
+  try {
+    const result = await session.run(
+      `MATCH (inviter:Neo4Member)-[:REFERRED]->(newMember:Neo4Member)
+       OPTIONAL MATCH (inviterAdopter:Neo4Adopter {discordUserId: inviter.discordUserId})
+       OPTIONAL MATCH (newMemberAdopter:Neo4Adopter {discordUserId: newMember.discordUserId, active: true})
+       WITH inviterAdopter IS NOT NULL AS inviterIsAdopter, count(newMember) AS referred,
+            count(newMemberAdopter) AS referredWhoAdopted
+       RETURN inviterIsAdopter,
+              referred,
+              referredWhoAdopted,
+              round(100.0 * referredWhoAdopted / referred, 1) AS conversionRatePct`
+    );
+
+    return result.records.map(record => ({
+      inviterIsAdopter: record.get("inviterIsAdopter"),
+      referred: record.get("referred").toNumber(),
+      referredWhoAdopted: record.get("referredWhoAdopted").toNumber(),
+      conversionRatePct: record.get("conversionRatePct")
+    }));
+  } finally {
+    await session.close();
+  }
+}
+
 module.exports = {
   driver,
   verifyConnectivity,
@@ -443,5 +547,9 @@ module.exports = {
   getOrganicAdoptionProof,
   getReactivationHistory,
   getAdoptersOnDate,
-  getAbandonedOnDate
+  getAbandonedOnDate,
+  recordNeo4Member,
+  recordNeo4Referral,
+  getTopReferrers,
+  getReferralConversionRate
 };

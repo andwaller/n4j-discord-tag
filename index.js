@@ -7,7 +7,8 @@ const {
   Routes,
   SlashCommandBuilder,
   Events,
-  MessageFlags
+  MessageFlags,
+  PermissionFlagsBits
 } = require("discord.js");
 
 const {
@@ -21,10 +22,50 @@ const {
   syncNeo4Adopters,
   getDaysToAdopt,
   getOrganicAdoptionProof,
-  getReactivationHistory
+  getReactivationHistory,
+  recordNeo4Member,
+  recordNeo4Referral
 } = require("./neo4j");
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+
+let inviteUsageCache = new Map();
+
+async function fetchInviteUsage(guild) {
+  const invites = await guild.invites.fetch();
+  const usage = new Map();
+
+  for (const invite of invites.values()) {
+    usage.set(invite.code, {
+      uses: invite.uses ?? 0,
+      maxUses: invite.maxUses ?? null,
+      inviterId: invite.inviter ? invite.inviter.id : null,
+      inviterUsername: invite.inviter ? invite.inviter.username : null
+    });
+  }
+
+  return usage;
+}
+
+function findUsedInviteCode(previousUsage, currentUsage) {
+  for (const [code, current] of currentUsage.entries()) {
+    const previous = previousUsage.get(code);
+
+    if (previous && current.uses > previous.uses) {
+      return code;
+    }
+  }
+
+  // Single-use invites self-delete the moment they're consumed, so a code
+  // that's now missing but was one use away from its max is the likely match.
+  for (const [code, previous] of previousUsage.entries()) {
+    if (!currentUsage.has(code) && previous.maxUses && previous.uses === previous.maxUses - 1) {
+      return code;
+    }
+  }
+
+  return null;
+}
 
 const client = new Client({
   intents: [
@@ -37,6 +78,7 @@ const commands = [
   new SlashCommandBuilder()
     .setName("neo4-stats")
     .setDescription("Show NEO4 Server Tag adoption statistics")
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
 ].map(command => command.toJSON());
 
 async function computeNeo4Stats(guild) {
@@ -146,6 +188,17 @@ client.once(Events.ClientReady, async readyClient => {
 
   console.log(`Connected to server: ${guild.name}`);
 
+  try {
+    inviteUsageCache = await fetchInviteUsage(guild);
+    console.log(`NEO4 referral tracking: cached ${inviteUsageCache.size} invite(s).`);
+  } catch (error) {
+    console.error(
+      "NEO4 referral tracking disabled: failed to fetch invites. The bot needs the " +
+      "'Manage Server' permission granted in this server for referral attribution to work.",
+      error
+    );
+  }
+
   const rest = new REST({ version: "10" })
     .setToken(process.env.DISCORD_TOKEN);
 
@@ -166,6 +219,61 @@ client.once(Events.ClientReady, async readyClient => {
   }
 
   scheduleNeo4Snapshots(guild);
+});
+
+client.on(Events.GuildMemberAdd, async member => {
+  try {
+    await recordNeo4Member({
+      discordUserId: member.id,
+      username: member.user.username,
+      displayName: member.displayName
+    });
+  } catch (error) {
+    console.error(`[NEO4 referral] Failed to record Neo4Member for ${member.user.username}:`, error);
+  }
+
+  const previousUsage = inviteUsageCache;
+  let currentUsage;
+
+  try {
+    currentUsage = await fetchInviteUsage(member.guild);
+  } catch (error) {
+    console.error(
+      "[NEO4 referral] Attribution skipped: failed to fetch invites " +
+      "(Manage Server permission may be missing).",
+      error
+    );
+    return;
+  }
+
+  const usedCode = findUsedInviteCode(previousUsage, currentUsage);
+  const inviterInfo = usedCode
+    ? currentUsage.get(usedCode) || previousUsage.get(usedCode)
+    : null;
+
+  inviteUsageCache = currentUsage;
+
+  if (!usedCode || !inviterInfo || !inviterInfo.inviterId) {
+    console.log(`[NEO4 referral] Could not attribute join for ${member.user.username}.`);
+    return;
+  }
+
+  try {
+    await recordNeo4Referral(
+      {
+        discordUserId: inviterInfo.inviterId,
+        username: inviterInfo.inviterUsername,
+        displayName: inviterInfo.inviterUsername
+      },
+      {
+        discordUserId: member.id,
+        username: member.user.username
+      },
+      usedCode
+    );
+  } catch (error) {
+    console.error(`[NEO4 referral] Failed to record referral for ${member.user.username}:`, error);
+  }
 });
 
 client.on(Events.InteractionCreate, async interaction => {

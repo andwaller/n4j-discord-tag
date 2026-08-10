@@ -373,7 +373,7 @@ client.on(Events.InteractionCreate, async interaction => {
         const avgDays = daysToAdopt.reduce((sum, a) => sum + a.daysToAdopt, 0) / daysToAdopt.length;
 
         growthLines.push(
-          `⏱️ Average days from joining the server to adopting NEO4: **${avgDays.toFixed(1)}**`
+          `⏱️ Average days to adopt NEO4, for members who joined since launch: **${avgDays.toFixed(1)}**`
         );
       }
 

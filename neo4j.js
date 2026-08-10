@@ -262,7 +262,9 @@ async function getDaysToAdopt() {
 
   try {
     const result = await session.run(
-      `MATCH (u:Neo4Adopter {active: true})
+      `MATCH (t:Neo4TagInfo {tagName: "NEO4"})
+       MATCH (u:Neo4Adopter {active: true})
+       WHERE date(u.guildJoinedAt) >= t.availableSince
        RETURN u.username AS username,
               u.guildJoinedAt AS guildJoinedAt,
               u.firstSeen AS firstSeen,

@@ -18,7 +18,10 @@ const {
   recordNeo4RoleSnapshot,
   recordNeo4DailyAdopterStatus,
   getNeo4SnapshotInsights,
-  syncNeo4Adopters
+  syncNeo4Adopters,
+  getDaysToAdopt,
+  getOrganicAdoptionProof,
+  getReactivationHistory
 } = require("./neo4j");
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
@@ -239,6 +242,46 @@ client.on(Events.InteractionCreate, async interaction => {
       historyText = lines.join("\n");
     }
 
+    let growthText = "";
+
+    try {
+      const [organicProof, daysToAdopt, reactivations] = await Promise.all([
+        getOrganicAdoptionProof(),
+        getDaysToAdopt(),
+        getReactivationHistory()
+      ]);
+
+      const growthLines = [];
+
+      if (organicProof) {
+        growthLines.push(
+          `🌱 **${organicProof.adoptersAtFirstMeasurement.toLocaleString()}** adopted with zero promotion, ` +
+          `within **${organicProof.daysUnmeasuredBeforeBaseline}** day(s) of launch (**${organicProof.tagAvailableSince}**) ` +
+          `— before this bot could even measure it`
+        );
+      }
+
+      if (daysToAdopt.length > 0) {
+        const avgDays = daysToAdopt.reduce((sum, a) => sum + a.daysToAdopt, 0) / daysToAdopt.length;
+
+        growthLines.push(
+          `⏱️ Average days from joining the server to adopting NEO4: **${avgDays.toFixed(1)}**`
+        );
+      }
+
+      if (reactivations.length > 0) {
+        growthLines.push(
+          `🔁 **${reactivations.length}** adopter(s) have re-adopted NEO4 after dropping it`
+        );
+      }
+
+      if (growthLines.length > 0) {
+        growthText = `\n\n**Growth insights**\n${growthLines.join("\n")}`;
+      }
+    } catch (error) {
+      console.error("Failed to load NEO4 growth insights:", error);
+    }
+
     const timestamp = Math.floor(Date.now() / 1000);
 
     const report =
@@ -252,7 +295,7 @@ client.on(Events.InteractionCreate, async interaction => {
 ${historyText}
 
 **NEO4 adopters by role**
-${roleText}
+${roleText}${growthText}
 
 _Last updated <t:${timestamp}:f>_`;
 

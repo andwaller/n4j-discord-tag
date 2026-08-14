@@ -60,21 +60,34 @@ async function execute(interaction) {
       return;
     }
 
-    const { total, adopterCount, rate, roleCounts } = await computeNeo4Stats(guild);
+    const { total, adopterCount, rate, adopters } = await computeNeo4Stats(guild);
     const rateDisplay = rate.toFixed(2);
 
-    // Only show roles held by at least 2 NEO4 adopters.
-    // This removes most one-off/noisy roles.
-    const significantRoles = [...roleCounts.entries()]
-      .filter(([, count]) => count >= 2)
-      .sort((a, b) => b[1] - a[1]);
+    // Mutually exclusive classification, highest-priority role wins.
+    // Each adopter is counted exactly once, so the buckets always
+    // reconcile to adopterCount.
+    let teamNodesCount = 0;
+    let graphiratisCount = 0;
 
-    let roleText = "No shared roles found.";
+    for (const member of adopters) {
+      const roleNames = new Set(member.roles.cache.map(role => role.name));
 
-    if (significantRoles.length > 0) {
-      roleText = significantRoles
-        .map(([role, count]) => `• **${role}:** ${count}`)
-        .join("\n");
+      if (roleNames.has("Neo4j Team Nodes")) {
+        teamNodesCount++;
+      } else if (roleNames.has("Graphiratis")) {
+        graphiratisCount++;
+      }
+    }
+
+    const otherCount = adopterCount - teamNodesCount - graphiratisCount;
+
+    let roleText =
+`NEO4 Tag Adopted: **${adopterCount.toLocaleString()}**
+Neo4j Team Nodes: **${teamNodesCount.toLocaleString()}**
+Graphiratis: **${graphiratisCount.toLocaleString()}**`;
+
+    if (otherCount > 0) {
+      roleText += `\nOther / Unclassified: **${otherCount.toLocaleString()}**`;
     }
 
     let insights = null;
@@ -170,7 +183,7 @@ async function execute(interaction) {
 
 ${historyText}
 
-**NEO4 adopters by role**
+**Who has adopted NEO4**
 ${roleText}${growthText}
 
 _Last updated <t:${timestamp}:f>_`;

@@ -51,6 +51,7 @@ function registerTeamNodesEngagementTracking(client) {
       if (!isTeamNodesAdopterMember(member, message.guild.id)) return;
 
       const weekStart = weekStartUtc(new Date(message.createdTimestamp)).toISOString().slice(0, 10);
+      const messageLink = `https://discord.com/channels/${message.guild.id}/${message.channel.id}/${message.id}`;
 
       await recordTeamNodesEngagement({
         discordUserId: member.id,
@@ -58,7 +59,8 @@ function registerTeamNodesEngagementTracking(client) {
         displayName: member.displayName,
         weekStart,
         channelName: message.channel.name,
-        messageAt: new Date(message.createdTimestamp).toISOString()
+        messageAt: new Date(message.createdTimestamp).toISOString(),
+        messageLink
       });
     } catch (error) {
       console.error("[team-nodes-engagement] Failed to record message engagement:", error);

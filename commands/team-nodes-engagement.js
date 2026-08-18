@@ -31,10 +31,10 @@ async function execute(interaction) {
 
     const weekStart = weekStartUtc(new Date()).toISOString().slice(0, 10);
     const engaged = await getTeamNodesEngagementForWeek(weekStart);
-    const engagedIds = new Set(engaged.map(e => e.discordUserId));
+    const engagementById = new Map(engaged.map(e => [e.discordUserId, e]));
 
-    const matched = teamNodesAdopters.filter(member => engagedIds.has(member.id));
-    const unmatched = teamNodesAdopters.filter(member => !engagedIds.has(member.id));
+    const matched = teamNodesAdopters.filter(member => engagementById.has(member.id));
+    const unmatched = teamNodesAdopters.filter(member => !engagementById.has(member.id));
 
     const history = await getTeamNodesEngagementHistory();
 
@@ -48,7 +48,13 @@ async function execute(interaction) {
       "",
       "**Engaged:**",
       ...(matched.length > 0
-        ? matched.map(member => `- ${member.displayName} (@${member.user.username})`)
+        ? matched.flatMap(member => {
+            const links = engagementById.get(member.id).messageLinks;
+            return [
+              `- ${member.displayName} (@${member.user.username})`,
+              ...links.map(link => `    ${link}`)
+            ];
+          })
         : ["_none_"]),
       "",
       "**Not yet engaged:**",

@@ -600,22 +600,28 @@ async function recordTeamNodesEngagement({
   displayName,
   weekStart,
   channelName,
-  messageAt
+  messageAt,
+  messageLink
 }) {
   const session = driver.session({ database: NEO4J_DATABASE });
 
   try {
-    // One row per (person, week): MERGE keeps the latest channel/timestamp
-    // rather than accumulating a row per message, since we only need to know
-    // whether someone engaged that week, not a full activity log.
+    // One node per (person, week): messageLinks accumulates every qualifying
+    // message that week (deduped), while lastChannelName/lastMessageAt just
+    // reflect the most recently processed message, not necessarily the most
+    // recent chronologically.
     await session.run(
       `MERGE (e:TeamNodesEngagement {discordUserId: $discordUserId, weekStart: date($weekStart)})
-       ON CREATE SET e.firstMessageAt = datetime($messageAt)
+       ON CREATE SET e.firstMessageAt = datetime($messageAt), e.messageLinks = [$messageLink]
+       ON MATCH SET e.messageLinks = CASE
+         WHEN $messageLink IN coalesce(e.messageLinks, []) THEN coalesce(e.messageLinks, [])
+         ELSE coalesce(e.messageLinks, []) + $messageLink
+       END
        SET e.username = $username,
            e.displayName = $displayName,
            e.lastMessageAt = datetime($messageAt),
            e.lastChannelName = $channelName`,
-      { discordUserId, username, displayName, weekStart, channelName, messageAt }
+      { discordUserId, username, displayName, weekStart, channelName, messageAt, messageLink }
     );
   } catch (error) {
     console.error(`Neo4j error while recording Team Nodes engagement for ${discordUserId}:`, error);
@@ -635,7 +641,8 @@ async function getTeamNodesEngagementForWeek(weekStart) {
               e.username AS username,
               e.displayName AS displayName,
               e.lastChannelName AS lastChannelName,
-              e.lastMessageAt AS lastMessageAt`,
+              e.lastMessageAt AS lastMessageAt,
+              coalesce(e.messageLinks, []) AS messageLinks`,
       { weekStart }
     );
 
@@ -644,7 +651,8 @@ async function getTeamNodesEngagementForWeek(weekStart) {
       username: record.get("username"),
       displayName: record.get("displayName"),
       lastChannelName: record.get("lastChannelName"),
-      lastMessageAt: record.get("lastMessageAt")
+      lastMessageAt: record.get("lastMessageAt"),
+      messageLinks: record.get("messageLinks")
     }));
   } finally {
     await session.close();

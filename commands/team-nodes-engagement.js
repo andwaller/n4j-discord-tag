@@ -36,7 +36,26 @@ async function execute(interaction) {
     const matched = teamNodesAdopters.filter(member => engagementById.has(member.id));
     const unmatched = teamNodesAdopters.filter(member => !engagementById.has(member.id));
 
+    // The invoking admin's own entry always goes last, so they review
+    // everyone else's engagement before their own.
+    const orderedMatched = [
+      ...matched.filter(member => member.id !== interaction.user.id),
+      ...matched.filter(member => member.id === interaction.user.id)
+    ];
+
     const history = await getTeamNodesEngagementHistory();
+
+    const engagedBlock = orderedMatched.length > 0
+      ? orderedMatched
+          .map((member, index) => {
+            const links = engagementById.get(member.id).messageLinks;
+            return [
+              `${index + 1}. ${member.displayName} (@${member.user.username})`,
+              ...links.map(link => `    ${link}`)
+            ].join("\n");
+          })
+          .join("\n\n")
+      : "_none_";
 
     const lines = [
       `📊 **Team Nodes Engagement — Week of ${weekStart}**`,
@@ -47,15 +66,8 @@ async function execute(interaction) {
       `**${matched.length} / ${teamNodesAdopters.length}** Team Nodes adopters posted this week`,
       "",
       "**Engaged:**",
-      ...(matched.length > 0
-        ? matched.flatMap(member => {
-            const links = engagementById.get(member.id).messageLinks;
-            return [
-              `- ${member.displayName} (@${member.user.username})`,
-              ...links.map(link => `    ${link}`)
-            ];
-          })
-        : ["_none_"]),
+      "",
+      engagedBlock,
       "",
       "**Not yet engaged:**",
       ...(unmatched.length > 0

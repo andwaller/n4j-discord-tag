@@ -7,6 +7,9 @@ const {
   getReactivationHistory
 } = require("../neo4j");
 
+const DISCOURSE_JOINER_ROLE_ID = "1539301152376627293";
+const TWIN4J_JOINER_ROLE_ID = "1539312969039614085";
+
 const data = new SlashCommandBuilder()
   .setName("neo4-stats")
   .setDescription("Show NEO4 Server Tag adoption statistics")
@@ -69,13 +72,29 @@ async function execute(interaction) {
     let teamNodesCount = 0;
     let graphiratisCount = 0;
 
+    // Source stats: independent of the classification above and of each
+    // other. A member can hold either/both of these roles regardless of
+    // their team/community bucket, so these are not subtracted into
+    // otherCount and don't need to reconcile to adopterCount.
+    let discourseJoinerCount = 0;
+    let twin4jJoinerCount = 0;
+
     for (const member of adopters) {
       const roleNames = new Set(member.roles.cache.map(role => role.name));
+      const roleIds = member.roles.cache;
 
       if (roleNames.has("Neo4j Team Nodes")) {
         teamNodesCount++;
       } else if (roleNames.has("Graphiratis")) {
         graphiratisCount++;
+      }
+
+      if (roleIds.has(DISCOURSE_JOINER_ROLE_ID)) {
+        discourseJoinerCount++;
+      }
+
+      if (roleIds.has(TWIN4J_JOINER_ROLE_ID)) {
+        twin4jJoinerCount++;
       }
     }
 
@@ -89,6 +108,10 @@ Graphiratis: **${graphiratisCount.toLocaleString()}**`;
     if (otherCount > 0) {
       roleText += `\nOther / Unclassified: **${otherCount.toLocaleString()}**`;
     }
+
+    const sourceText =
+`Discourse Joiner: **${discourseJoinerCount.toLocaleString()}**
+Twin4j Joiner: **${twin4jJoinerCount.toLocaleString()}**`;
 
     let insights = null;
 
@@ -184,7 +207,10 @@ Graphiratis: **${graphiratisCount.toLocaleString()}**`;
 ${historyText}
 
 **Who has adopted NEO4**
-${roleText}${growthText}
+${roleText}
+
+**Adoption source**
+${sourceText}${growthText}
 
 _Last updated <t:${timestamp}:f>_`;
 

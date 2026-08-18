@@ -49,6 +49,11 @@ async function ensureNeo4Constraints() {
       `CREATE CONSTRAINT neo4_member_discord_user_id_unique IF NOT EXISTS
        FOR (m:Neo4Member) REQUIRE m.discordUserId IS UNIQUE`
     );
+
+    await session.run(
+      `CREATE CONSTRAINT team_nodes_engagement_unique IF NOT EXISTS
+       FOR (e:TeamNodesEngagement) REQUIRE (e.discordUserId, e.weekStart) IS UNIQUE`
+    );
   } finally {
     await session.close();
   }
@@ -589,6 +594,82 @@ async function recordDmCampaign({
   }
 }
 
+async function recordTeamNodesEngagement({
+  discordUserId,
+  username,
+  displayName,
+  weekStart,
+  channelName,
+  messageAt
+}) {
+  const session = driver.session({ database: NEO4J_DATABASE });
+
+  try {
+    // One row per (person, week): MERGE keeps the latest channel/timestamp
+    // rather than accumulating a row per message, since we only need to know
+    // whether someone engaged that week, not a full activity log.
+    await session.run(
+      `MERGE (e:TeamNodesEngagement {discordUserId: $discordUserId, weekStart: date($weekStart)})
+       ON CREATE SET e.firstMessageAt = datetime($messageAt)
+       SET e.username = $username,
+           e.displayName = $displayName,
+           e.lastMessageAt = datetime($messageAt),
+           e.lastChannelName = $channelName`,
+      { discordUserId, username, displayName, weekStart, channelName, messageAt }
+    );
+  } catch (error) {
+    console.error(`Neo4j error while recording Team Nodes engagement for ${discordUserId}:`, error);
+    throw error;
+  } finally {
+    await session.close();
+  }
+}
+
+async function getTeamNodesEngagementForWeek(weekStart) {
+  const session = driver.session({ database: NEO4J_DATABASE });
+
+  try {
+    const result = await session.run(
+      `MATCH (e:TeamNodesEngagement {weekStart: date($weekStart)})
+       RETURN e.discordUserId AS discordUserId,
+              e.username AS username,
+              e.displayName AS displayName,
+              e.lastChannelName AS lastChannelName,
+              e.lastMessageAt AS lastMessageAt`,
+      { weekStart }
+    );
+
+    return result.records.map(record => ({
+      discordUserId: record.get("discordUserId"),
+      username: record.get("username"),
+      displayName: record.get("displayName"),
+      lastChannelName: record.get("lastChannelName"),
+      lastMessageAt: record.get("lastMessageAt")
+    }));
+  } finally {
+    await session.close();
+  }
+}
+
+async function getTeamNodesEngagementHistory() {
+  const session = driver.session({ database: NEO4J_DATABASE });
+
+  try {
+    const result = await session.run(
+      `MATCH (e:TeamNodesEngagement)
+       RETURN e.weekStart AS weekStart, count(DISTINCT e.discordUserId) AS engagedCount
+       ORDER BY e.weekStart ASC`
+    );
+
+    return result.records.map(record => ({
+      weekStart: record.get("weekStart").toString(),
+      engagedCount: record.get("engagedCount").toNumber()
+    }));
+  } finally {
+    await session.close();
+  }
+}
+
 module.exports = {
   driver,
   verifyConnectivity,
@@ -609,5 +690,8 @@ module.exports = {
   recordNeo4Referral,
   getTopReferrers,
   getReferralConversionRate,
-  recordDmCampaign
+  recordDmCampaign,
+  recordTeamNodesEngagement,
+  getTeamNodesEngagementForWeek,
+  getTeamNodesEngagementHistory
 };

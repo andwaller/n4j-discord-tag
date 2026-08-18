@@ -9,6 +9,23 @@ const {
 
 const DISCOURSE_JOINER_ROLE_ID = "1539301152376627293";
 const TWIN4J_JOINER_ROLE_ID = "1539312969039614085";
+const TEAM_NODES_ROLE_NAME = "Neo4j Team Nodes";
+
+function isTeamNodesMember(member) {
+  return member.roles.cache.some(role => role.name === TEAM_NODES_ROLE_NAME);
+}
+
+function isTeamNodesAdopterMember(member, guildId) {
+  const primaryGuild = member.user.primaryGuild;
+
+  const usesNeo4Tag =
+    primaryGuild &&
+    primaryGuild.identityGuildId === guildId &&
+    primaryGuild.identityEnabled;
+
+  if (!usesNeo4Tag) return false;
+  return isTeamNodesMember(member);
+}
 
 const data = new SlashCommandBuilder()
   .setName("neo4-stats")
@@ -225,4 +242,4 @@ _Last updated <t:${timestamp}:f>_`;
   }
 }
 
-module.exports = { data, execute, computeNeo4Stats };
+module.exports = { data, execute, computeNeo4Stats, isTeamNodesMember, isTeamNodesAdopterMember };

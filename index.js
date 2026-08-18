@@ -22,6 +22,8 @@ const {
 
 const neo4Stats = require("./commands/neo4-stats");
 const dmRole = require("./commands/dm-role");
+const teamNodesEngagementCommand = require("./commands/team-nodes-engagement");
+const { registerTeamNodesEngagementTracking } = require("./team-nodes-engagement");
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -66,11 +68,12 @@ function findUsedInviteCode(previousUsage, currentUsage) {
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMessages
   ]
 });
 
-const commandModules = [neo4Stats, dmRole];
+const commandModules = [neo4Stats, dmRole, teamNodesEngagementCommand];
 const commandsByName = new Map(
   commandModules.map(module => [module.data.name, module])
 );
@@ -180,6 +183,7 @@ client.once(Events.ClientReady, async readyClient => {
   }
 
   scheduleNeo4Snapshots(guild);
+  registerTeamNodesEngagementTracking(client);
 });
 
 client.on(Events.GuildMemberAdd, async member => {
